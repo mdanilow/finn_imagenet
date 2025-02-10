@@ -7,6 +7,7 @@ import warnings
 from enum import Enum
 from os.path import join
 from pathlib import Path
+import json
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -22,6 +23,9 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
+from brevitas import config
+
+config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
 from utils import increment_path, save_checkpoint
@@ -246,6 +250,8 @@ def main_worker(gpu, ngpus_per_node, args):
         RESULTS_TAGS = ('Epoch', 'Train_loss', 'Val_loss', 'Val_Acc@1', 'Val_Acc@5')
         header = '%15s' * len(RESULTS_TAGS) % RESULTS_TAGS
         results_file.write_text(header + '\n')
+        with open(join(save_dir, 'args.json'), 'w') as args_file:
+            json.dump(vars(args), args_file, indent=4)
 
 
     # Data loading code
@@ -257,7 +263,7 @@ def main_worker(gpu, ngpus_per_node, args):
         traindir = os.path.join(args.data, 'train')
         valdir = os.path.join(args.data, 'val')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+                                         std=[0.229, 0.224, 0.225])
 
         train_dataset = datasets.ImageFolder(
             traindir,

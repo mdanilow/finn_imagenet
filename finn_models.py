@@ -251,7 +251,7 @@ class QuantInvertedResidual(nn.Module):
                                       act_quant=CommonIntActQuant,
                                       bit_width=act_bit_width,
                                     #   per_channel_broadcastable_shape=(1, hidden_dim, 1, 1),
-                                      scaling_per_channel=False,
+                                      scaling_per_channel=True,
                                       return_quant_tensor=True)
         
         layers = []
