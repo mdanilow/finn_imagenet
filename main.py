@@ -65,8 +65,8 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
-parser.add_argument('--pretrained', dest='pretrained', action='store_true',
-                    help='use pre-trained model')
+parser.add_argument('--pretrained', default='', type=str,
+                    help='path to pretrained weights')
 parser.add_argument('--world-size', default=-1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
@@ -153,12 +153,11 @@ def main_worker(gpu, ngpus_per_node, args):
         print("==> Using finn model:", args.arch)
         model = eval(args.arch)()
     else:
-        if args.pretrained:
-            print("=> using pre-trained model '{}'".format(args.arch))
-            model = models.__dict__[args.arch](pretrained=True)
-        else:
-            print("=> creating model '{}'".format(args.arch))
-            model = models.__dict__[args.arch]()
+        print("=> creating model '{}'".format(args.arch))
+        model = models.__dict__[args.arch]()
+    if args.pretrained != '':
+        print("=> initializing model with", args.pretrained)
+        model.load_state_dict(torch.load(args.pretrained))
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
@@ -246,7 +245,6 @@ def main_worker(gpu, ngpus_per_node, args):
         os.makedirs(save_dir)
         RESULTS_TAGS = ('Epoch', 'Train_loss', 'Val_loss', 'Val_Acc@1', 'Val_Acc@5')
         header = '%15s' * len(RESULTS_TAGS) % RESULTS_TAGS
-        print('header:', header)
         results_file.write_text(header + '\n')
 
 

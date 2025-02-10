@@ -189,7 +189,7 @@ class MobileNetV2(nn.Module):
 
 # ------------- QUANT MOBILENETV2
 
-class QuantConvBNReLU(nn.Module):
+class QuantConvBNReLU(nn.Sequential):
 
     def __init__(
             self,
@@ -203,31 +203,34 @@ class QuantConvBNReLU(nn.Module):
             groups=1,
             bn_eps=1e-5,
             activation_scaling_per_channel=True):
-        super(QuantConvBNReLU, self).__init__()
         self.padding = (kernel_size - 1) // 2 if padding == None else padding
-        self.conv = QuantConv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=self.padding,
-            groups=groups,
-            bias=False,
-            weight_quant=CommonIntWeightPerChannelQuant,
-            weight_bit_width=weight_bit_width)
-        self.bn = nn.BatchNorm2d(num_features=out_channels, eps=bn_eps)
-        self.activation = QuantReLU(
-            act_quant=CommonUintActQuant,
-            bit_width=act_bit_width,
-            per_channel_broadcastable_shape=(1, out_channels, 1, 1),
-            scaling_per_channel=activation_scaling_per_channel,
-            return_quant_tensor=True)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.activation(x)
-        return x
+        layers = []
+        layers.append(
+            QuantConv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=self.padding,
+                groups=groups,
+                bias=False,
+                weight_quant=CommonIntWeightPerChannelQuant,
+                weight_bit_width=weight_bit_width
+            )
+        )
+        layers.append(
+            nn.BatchNorm2d(num_features=out_channels, eps=bn_eps)
+        )
+        layers.append(
+            QuantReLU(
+                act_quant=CommonUintActQuant,
+                bit_width=act_bit_width,
+                per_channel_broadcastable_shape=(1, out_channels, 1, 1),
+                scaling_per_channel=activation_scaling_per_channel,
+                return_quant_tensor=True
+            )
+        )
+        super().__init__(*layers)
     
 
 class QuantInvertedResidual(nn.Module):
@@ -269,7 +272,7 @@ class QuantInvertedResidual(nn.Module):
                         kernel_size=1,
                         stride=1,
                         padding=0,
-                        bias=True,
+                        bias=False,
                         weight_quant=CommonIntWeightPerChannelQuant,
                         weight_bit_width=weight_bit_width),
                         
