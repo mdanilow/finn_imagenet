@@ -5,6 +5,8 @@ import shutil
 import time
 import warnings
 from enum import Enum
+from os.path import join
+from pathlib import Path
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -22,6 +24,7 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
 from finn_models import QuantMobileNetV2
+from utils import increment_path, save_checkpoint
 
 
 finn_models = ['QuantMobileNetV2']
@@ -82,6 +85,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 parser.add_argument('--dummy', action='store_true', help="use fake data to benchmark")
+parser.add_argument('--name', default="exp", type=str)
 
 best_acc1 = 0
 
@@ -213,6 +217,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
+            save_dir = Path(args.resume).parent
             print("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
                 checkpoint = torch.load(args.resume)
@@ -228,10 +233,21 @@ def main_worker(gpu, ngpus_per_node, args):
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
+            training_results = checkpoint['training_results']
+            results_file = save_dir / 'results.txt'
+            results_file.write_text(training_results)
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
+    else:
+        save_dir = increment_path(args.name, exist_ok=False)
+        results_file = Path(save_dir) / 'results.txt'
+        os.makedirs(save_dir)
+        RESULTS_TAGS = ('Epoch', 'Train_loss', 'Val_loss', 'Val_Acc@1', 'Val_Acc@5')
+        header = '%15s' * len(RESULTS_TAGS) % RESULTS_TAGS
+        print('header:', header)
+        results_file.write_text(header + '\n')
 
 
     # Data loading code
@@ -287,16 +303,19 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, device, args)
+        train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1, acc5, val_loss = validate(val_loader, model, criterion, args)
         
         scheduler.step()
         
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
+        results = (epoch, train_loss, val_loss, acc1, acc5)
+        with open(results_file, 'a') as f:
+            f.write('%15.4g' * 5 % results + '\n')  # append metrics, val_loss
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -306,8 +325,11 @@ def main_worker(gpu, ngpus_per_node, args):
                 'state_dict': model.state_dict(),
                 'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
-                'scheduler' : scheduler.state_dict()
-            }, is_best)
+                'scheduler' : scheduler.state_dict(),
+                'training_results' : results_file.read_text()
+            },
+            is_best=is_best,
+            save_dir=save_dir)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, device, args):
@@ -355,6 +377,8 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
         if i % args.print_freq == 0:
             progress.display(i + 1)
 
+    return losses.avg
+
 
 def validate(val_loader, model, criterion, args):
 
@@ -388,6 +412,7 @@ def validate(val_loader, model, criterion, args):
                 if i % args.print_freq == 0:
                     progress.display(i + 1)
 
+
     batch_time = AverageMeter('Time', ':6.3f', Summary.NONE)
     losses = AverageMeter('Loss', ':.4e', Summary.NONE)
     top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -415,13 +440,8 @@ def validate(val_loader, model, criterion, args):
 
     progress.display_summary()
 
-    return top1.avg
+    return top1.avg, top5.avg, losses.avg
 
-
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
-    if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
 
 class Summary(Enum):
     NONE = 0
