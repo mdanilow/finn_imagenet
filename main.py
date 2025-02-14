@@ -28,7 +28,7 @@ from brevitas import config
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint
+from utils import increment_path, save_checkpoint, ModelEMA
 
 
 finn_models = ['QuantMobileNetV2']
@@ -44,7 +44,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='mobilenet_v2',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
-                        ' (default: resnet18)')
+                        ' (default: mobilenet_v2)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
@@ -90,6 +90,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'multi node data parallel training')
 parser.add_argument('--dummy', action='store_true', help="use fake data to benchmark")
 parser.add_argument('--name', default="exp", type=str)
+parser.add_argument('--use_ema', action='store_true')
 
 best_acc1 = 0
 
@@ -162,6 +163,8 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.pretrained != '':
         print("=> initializing model with", args.pretrained)
         model.load_state_dict(torch.load(args.pretrained))
+        if args.use_ema:
+            ema = ModelEMA(model)
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
@@ -234,6 +237,12 @@ def main_worker(gpu, ngpus_per_node, args):
                 # best_acc1 may be from a checkpoint from a different GPU
                 best_acc1 = best_acc1.to(args.gpu)
             model.load_state_dict(checkpoint['state_dict'])
+            if args.use_ema:
+                ema = ModelEMA(model)
+                if 'ema' in checkpoint:
+                    ema.load_state_dict(checkpoint['ema'])
+                    ema.updates = checkpoint['updates']
+
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
             training_results = checkpoint['training_results']
@@ -244,6 +253,8 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
     else:
+        if args.use_ema:
+            ema = ModelEMA(model)
         save_dir = increment_path(args.name, exist_ok=False)
         results_file = Path(save_dir) / 'results.txt'
         os.makedirs(save_dir)
@@ -299,7 +310,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, ema if args.use_ema else model, criterion, args)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -307,10 +318,10 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args)
+        train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args, ema=(ema if args.use_ema else None))
 
         # evaluate on validation set
-        acc1, acc5, val_loss = validate(val_loader, model, criterion, args)
+        acc1, acc5, val_loss = validate(val_loader, ema if args.use_ema else None, criterion, args)
         
         scheduler.step()
         
@@ -323,7 +334,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
+            ckpt = {
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
@@ -331,12 +342,14 @@ def main_worker(gpu, ngpus_per_node, args):
                 'optimizer' : optimizer.state_dict(),
                 'scheduler' : scheduler.state_dict(),
                 'training_results' : results_file.read_text()
-            },
-            is_best=is_best,
-            save_dir=save_dir)
+            }
+            if args.use_ema:
+                ckpt['ema'] = ema.ema.state_dict()
+                ckpt['updates'] = ema.updates
+            save_checkpoint(ckpt, is_best=is_best, save_dir=save_dir)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, device, args):
+def train(train_loader, model, criterion, optimizer, epoch, device, args, ema=None):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -373,6 +386,8 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
 
         # measure elapsed time
         batch_time.update(time.time() - end)
