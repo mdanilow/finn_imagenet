@@ -3,11 +3,17 @@ import shutil
 from pathlib import Path
 from copy import deepcopy
 import math
+from multiprocessing.pool import ThreadPool
 
 import glob
 import re
 import torch
 from torch import nn
+from tqdm import tqdm
+
+from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
+from torchvision.datasets import VisionDataset
+from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
 
 
 def increment_path(path, exist_ok=True, sep=''):
@@ -49,6 +55,7 @@ class ModelEMA:
         # if next(model.parameters()).device.type != 'cpu':
         #     self.ema.half()  # FP16 EMA
         self.device = next(model.parameters()).device
+        # self.ema.to(self.device)
         self.updates = updates  # number of EMA updates
         self.decay = lambda x: decay * (1 - math.exp(-x / 2000))  # decay exponential ramp (to help early epochs)
         self.overwrite_quant_scales = not average_quant_scales
@@ -81,3 +88,227 @@ class ModelEMA:
             if new_keys:
                 print('LOADED')
                 self.ema.load_state_dict(ema_msd)
+
+
+class MyDatasetFolder(VisionDataset):
+    """A generic data loader.
+
+    This default directory structure can be customized by overriding the
+    :meth:`find_classes` method.
+
+    Args:
+        root (str or ``pathlib.Path``): Root directory path.
+        loader (callable): A function to load a sample given its path.
+        extensions (tuple[string]): A list of allowed extensions.
+            both extensions and is_valid_file should not be passed.
+        transform (callable, optional): A function/transform that takes in
+            a sample and returns a transformed version.
+            E.g, ``transforms.RandomCrop`` for images.
+        target_transform (callable, optional): A function/transform that takes
+            in the target and transforms it.
+        is_valid_file (callable, optional): A function that takes path of a file
+            and check if the file is a valid file (used to check of corrupt files)
+            both extensions and is_valid_file should not be passed.
+        allow_empty(bool, optional): If True, empty folders are considered to be valid classes.
+            An error is raised on empty folders if False (default).
+
+     Attributes:
+        classes (list): List of the class names sorted alphabetically.
+        class_to_idx (dict): Dict with items (class_name, class_index).
+        samples (list): List of (sample path, class_index) tuples
+        targets (list): The class_index value for each image in the dataset
+    """
+
+    def __init__(
+        self,
+        root: Union[str, Path],
+        loader: Callable[[str], Any],
+        extensions: Optional[Tuple[str, ...]] = None,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        is_valid_file: Optional[Callable[[str], bool]] = None,
+        allow_empty: bool = False,
+        cache_images: bool = False
+    ) -> None:
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        classes, class_to_idx = self.find_classes(self.root)
+        samples = self.make_dataset(
+            self.root,
+            class_to_idx=class_to_idx,
+            extensions=extensions,
+            is_valid_file=is_valid_file,
+            allow_empty=allow_empty,
+        )
+
+        self.cache_images = cache_images
+        self.loader = loader
+        self.extensions = extensions
+
+        self.classes = classes
+        self.class_to_idx = class_to_idx
+        self.samples = samples
+        self.targets = [s[1] for s in samples]
+
+        if cache_images:
+            self.imgs = [None] * len(self.samples)
+            gb = 0
+            results = ThreadPool(8).imap(lambda x: self.loader(x[0]), self.samples)
+            pbar = tqdm(enumerate(results), total=len(self.samples))
+            for i, x in pbar:
+                self.imgs[i] = x
+                # gb += self.imgs[i].nbytes
+                # pbar.desc = f'Caching images ({gb / 1E9:.1f}GB)'
+                pbar.desc = 'Caching val images'
+
+    @staticmethod
+    def make_dataset(
+        directory: Union[str, Path],
+        class_to_idx: Dict[str, int],
+        extensions: Optional[Tuple[str, ...]] = None,
+        is_valid_file: Optional[Callable[[str], bool]] = None,
+        allow_empty: bool = False,
+    ) -> List[Tuple[str, int]]:
+        """Generates a list of samples of a form (path_to_sample, class).
+
+        This can be overridden to e.g. read files from a compressed zip file instead of from the disk.
+
+        Args:
+            directory (str): root dataset directory, corresponding to ``self.root``.
+            class_to_idx (Dict[str, int]): Dictionary mapping class name to class index.
+            extensions (optional): A list of allowed extensions.
+                Either extensions or is_valid_file should be passed. Defaults to None.
+            is_valid_file (optional): A function that takes path of a file
+                and checks if the file is a valid file
+                (used to check of corrupt files) both extensions and
+                is_valid_file should not be passed. Defaults to None.
+            allow_empty(bool, optional): If True, empty folders are considered to be valid classes.
+                An error is raised on empty folders if False (default).
+
+        Raises:
+            ValueError: In case ``class_to_idx`` is empty.
+            ValueError: In case ``extensions`` and ``is_valid_file`` are None or both are not None.
+            FileNotFoundError: In case no valid file was found for any class.
+
+        Returns:
+            List[Tuple[str, int]]: samples of a form (path_to_sample, class)
+        """
+        if class_to_idx is None:
+            # prevent potential bug since make_dataset() would use the class_to_idx logic of the
+            # find_classes() function, instead of using that of the find_classes() method, which
+            # is potentially overridden and thus could have a different logic.
+            raise ValueError("The class_to_idx parameter cannot be None.")
+        return make_dataset(
+            directory, class_to_idx, extensions=extensions, is_valid_file=is_valid_file, allow_empty=allow_empty
+        )
+
+    def find_classes(self, directory: Union[str, Path]) -> Tuple[List[str], Dict[str, int]]:
+        """Find the class folders in a dataset structured as follows::
+
+            directory/
+            ├── class_x
+            │   ├── xxx.ext
+            │   ├── xxy.ext
+            │   └── ...
+            │       └── xxz.ext
+            └── class_y
+                ├── 123.ext
+                ├── nsdf3.ext
+                └── ...
+                └── asd932_.ext
+
+        This method can be overridden to only consider
+        a subset of classes, or to adapt to a different dataset directory structure.
+
+        Args:
+            directory(str): Root directory path, corresponding to ``self.root``
+
+        Raises:
+            FileNotFoundError: If ``dir`` has no class folders.
+
+        Returns:
+            (Tuple[List[str], Dict[str, int]]): List of all classes and dictionary mapping each class to an index.
+        """
+        return find_classes(directory)
+
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
+        """
+        Args:
+            index (int): Index
+
+        Returns:
+            tuple: (sample, target) where target is class_index of the target class.
+        """
+
+        if self.cache_images:
+            target = self.samples[index][1]
+            sample = self.imgs[index]
+        else:
+            path, target = self.samples[index]
+            sample = self.loader(path)
+
+        if self.transform is not None:
+            sample = self.transform(sample)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return sample, target
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+
+class MyImageFolder(MyDatasetFolder):
+    """A generic data loader where the images are arranged in this way by default: ::
+
+        root/dog/xxx.png
+        root/dog/xxy.png
+        root/dog/[...]/xxz.png
+
+        root/cat/123.png
+        root/cat/nsdf3.png
+        root/cat/[...]/asd932_.png
+
+    This class inherits from :class:`~torchvision.datasets.DatasetFolder` so
+    the same methods can be overridden to customize the dataset.
+
+    Args:
+        root (str or ``pathlib.Path``): Root directory path.
+        transform (callable, optional): A function/transform that takes in a PIL image
+            and returns a transformed version. E.g, ``transforms.RandomCrop``
+        target_transform (callable, optional): A function/transform that takes in the
+            target and transforms it.
+        loader (callable, optional): A function to load an image given its path.
+        is_valid_file (callable, optional): A function that takes path of an Image file
+            and check if the file is a valid file (used to check of corrupt files)
+        allow_empty(bool, optional): If True, empty folders are considered to be valid classes.
+            An error is raised on empty folders if False (default).
+
+     Attributes:
+        classes (list): List of the class names sorted alphabetically.
+        class_to_idx (dict): Dict with items (class_name, class_index).
+        imgs (list): List of (image path, class_index) tuples
+    """
+
+    def __init__(
+        self,
+        root: str,
+        transform: Optional[Callable] = None,
+        target_transform: Optional[Callable] = None,
+        loader: Callable[[str], Any] = default_loader,
+        is_valid_file: Optional[Callable[[str], bool]] = None,
+        allow_empty: bool = False,
+        cache_images: bool = False
+    ):
+        super().__init__(
+            root,
+            loader,
+            IMG_EXTENSIONS if is_valid_file is None else None,
+            transform=transform,
+            target_transform=target_transform,
+            is_valid_file=is_valid_file,
+            allow_empty=allow_empty,
+            cache_images=cache_images
+        )
+        # self.imgs = self.samples
+
+

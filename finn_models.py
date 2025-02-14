@@ -299,6 +299,8 @@ class QuantMobileNetV2(nn.Module):
                  round_nearest=8,
                  weight_bit_width=8,
                  act_bit_width=8,
+                 first_layer_weight_bit_width=8,
+                 last_layer_weight_bit_width=8,
                  block=None,
                  norm_layer=None):
         """
@@ -345,7 +347,7 @@ class QuantMobileNetV2(nn.Module):
         # building first layer
         input_channel = _make_divisible(input_channel * width_mult, round_nearest)
         self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), round_nearest)
-        features = [QuantConvBNReLU(3, input_channel, stride=2, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)]
+        features = [QuantConvBNReLU(3, input_channel, stride=2, weight_bit_width=first_layer_weight_bit_width, act_bit_width=act_bit_width)]
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             output_channel = _make_divisible(c * width_mult, round_nearest)
@@ -361,14 +363,14 @@ class QuantMobileNetV2(nn.Module):
         self.final_pool = TruncAvgPool2d(
             kernel_size=7,
             stride=1,
-            bit_width=act_bit_width,
+            bit_width=last_layer_weight_bit_width,
             float_to_int_impl_type='ROUND')
 
         # building classifier
         self.classifier = nn.Sequential(
             nn.Dropout(0.2),
             QuantLinear(self.last_channel, num_classes, bias=True, bias_quant=Int32Bias, weight_quant=CommonIntWeightPerChannelQuant,
-                           weight_bit_width=weight_bit_width),
+                           weight_bit_width=last_layer_weight_bit_width),
         )
 
         # weight initialization
