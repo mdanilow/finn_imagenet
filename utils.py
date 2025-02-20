@@ -10,6 +10,9 @@ import re
 import torch
 from torch import nn
 from tqdm import tqdm
+import tarfile
+from PIL import Image
+import io
 
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
 from torchvision.datasets import VisionDataset
@@ -55,6 +58,7 @@ class ModelEMA:
         # if next(model.parameters()).device.type != 'cpu':
         #     self.ema.half()  # FP16 EMA
         self.device = next(model.parameters()).device
+        print('ema device:', self.device)
         # self.ema.to(self.device)
         self.updates = updates  # number of EMA updates
         self.decay = lambda x: decay * (1 - math.exp(-x / 2000))  # decay exponential ramp (to help early epochs)
@@ -128,19 +132,52 @@ class MyDatasetFolder(VisionDataset):
         target_transform: Optional[Callable] = None,
         is_valid_file: Optional[Callable[[str], bool]] = None,
         allow_empty: bool = False,
-        cache_images: bool = False
+        cache_images: bool = False,
+        from_tar: bool = False
     ) -> None:
         super().__init__(root, transform=transform, target_transform=target_transform)
-        classes, class_to_idx = self.find_classes(self.root)
-        samples = self.make_dataset(
-            self.root,
-            class_to_idx=class_to_idx,
-            extensions=extensions,
-            is_valid_file=is_valid_file,
-            allow_empty=allow_empty,
-        )
+
+        # caches images by default, for train ImageNet only
+        if from_tar:
+            self.cache_images = True
+            self.imgs = []
+            classes = []
+            samples = []
+            # read metadata
+            with open(self.root, 'rb') as fd:
+                with tarfile.open(fileobj=fd, mode='r') as tar_root:
+                    for item in tar_root:
+                        classes.append(item.name)
+            classes = sorted(classes)
+            class_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+
+            with open(self.root, 'rb') as fd:
+                with tarfile.open(fileobj=fd, mode='r') as tar_root:
+                    pbar = tqdm(tar_root, total=len(classes))
+                    # enumerate_pbar = enumerate(pbar)
+                    pbar.desc = "Caching train images"
+                    for item in pbar:
+                        with tar_root.extractfile(item) as class_fd:
+                            with tarfile.open(fileobj=class_fd, mode='r') as class_tar:
+                                for i, img_file in enumerate(class_tar):
+                                    img = class_tar.extractfile(img_file)
+                                    img = img.read()
+                                    img = Image.open(io.BytesIO(img)).convert("RGB")
+                                    self.imgs.append(img)
+                                    samples.append((None, class_to_idx[item.name]))
+            
+        else:
+            classes, class_to_idx = self.find_classes(self.root)
+            samples = self.make_dataset(
+                self.root,
+                class_to_idx=class_to_idx,
+                extensions=extensions,
+                is_valid_file=is_valid_file,
+                allow_empty=allow_empty,
+            )
 
         self.cache_images = cache_images
+        self.from_tar = from_tar
         self.loader = loader
         self.extensions = extensions
 
@@ -149,7 +186,7 @@ class MyDatasetFolder(VisionDataset):
         self.samples = samples
         self.targets = [s[1] for s in samples]
 
-        if cache_images:
+        if cache_images and not from_tar:
             self.imgs = [None] * len(self.samples)
             gb = 0
             results = ThreadPool(8).imap(lambda x: self.loader(x[0]), self.samples)
@@ -297,7 +334,8 @@ class MyImageFolder(MyDatasetFolder):
         loader: Callable[[str], Any] = default_loader,
         is_valid_file: Optional[Callable[[str], bool]] = None,
         allow_empty: bool = False,
-        cache_images: bool = False
+        cache_images: bool = False,
+        from_tar: bool = False
     ):
         super().__init__(
             root,
@@ -307,7 +345,8 @@ class MyImageFolder(MyDatasetFolder):
             target_transform=target_transform,
             is_valid_file=is_valid_file,
             allow_empty=allow_empty,
-            cache_images=cache_images
+            cache_images=cache_images,
+            from_tar=from_tar
         )
         # self.imgs = self.samples
 

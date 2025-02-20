@@ -28,7 +28,7 @@ from brevitas import config
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint, ModelEMA
+from utils import increment_path, save_checkpoint, ModelEMA, MyImageFolder
 
 
 finn_models = ['QuantMobileNetV2']
@@ -91,6 +91,9 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument('--dummy', action='store_true', help="use fake data to benchmark")
 parser.add_argument('--name', default="exp", type=str)
 parser.add_argument('--use_ema', action='store_true')
+parser.add_argument('--cache_images', action='store_true')
+parser.add_argument('--weight_bit_width', type=int, default=8)
+parser.add_argument('--act_bit_width', type=int, default=8)
 
 best_acc1 = 0
 
@@ -156,15 +159,13 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     if args.arch in finn_models:
         print("==> Using finn model:", args.arch)
-        model = eval(args.arch)()
+        model = eval(args.arch)(weight_bit_width=args.weight_bit_width, act_bit_width=args.act_bit_width)
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
     if args.pretrained != '':
         print("=> initializing model with", args.pretrained)
         model.load_state_dict(torch.load(args.pretrained))
-        if args.use_ema:
-            ema = ModelEMA(model)
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
@@ -276,23 +277,28 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
-        train_dataset = datasets.ImageFolder(
+        train_dataset = MyImageFolder(
             traindir,
+            # '~/Downloads/ILSVRC2012_img_train.tar',
             transforms.Compose([
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 normalize,
-            ]))
+            ]),
+            # from_tar=True
+            )
 
-        val_dataset = datasets.ImageFolder(
+        val_dataset = MyImageFolder(
             valdir,
             transforms.Compose([
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 normalize,
-            ]))
+            ]),
+            cache_images=True
+            )
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -310,7 +316,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
     if args.evaluate:
-        validate(val_loader, ema if args.use_ema else model, criterion, args)
+        validate(val_loader, ema.ema if args.use_ema else model, criterion, args)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -321,7 +327,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args, ema=(ema if args.use_ema else None))
 
         # evaluate on validation set
-        acc1, acc5, val_loss = validate(val_loader, ema if args.use_ema else None, criterion, args)
+        acc1, acc5, val_loss = validate(val_loader, ema.ema if args.use_ema else model, criterion, args)
         
         scheduler.step()
         
