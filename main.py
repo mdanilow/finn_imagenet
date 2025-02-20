@@ -28,7 +28,7 @@ from brevitas import config
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint, ModelEMA, MyImageFolder
+from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder
 
 
 finn_models = ['QuantMobileNetV2']
@@ -239,9 +239,10 @@ def main_worker(gpu, ngpus_per_node, args):
                 best_acc1 = best_acc1.to(args.gpu)
             model.load_state_dict(checkpoint['state_dict'])
             if args.use_ema:
-                ema = ModelEMA(model)
+                # ema = ModelEMA(model)
+                ema = EMA(model)
                 if 'ema' in checkpoint:
-                    ema.load_state_dict(checkpoint['ema'])
+                    ema.shadow = checkpoint['ema']
                     ema.updates = checkpoint['updates']
 
             optimizer.load_state_dict(checkpoint['optimizer'])
@@ -255,7 +256,8 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> no checkpoint found at '{}'".format(args.resume))
     else:
         if args.use_ema:
-            ema = ModelEMA(model)
+            # ema = ModelEMA(model)
+            ema = EMA(model)
         save_dir = increment_path(args.name, exist_ok=False)
         results_file = Path(save_dir) / 'results.txt'
         os.makedirs(save_dir)
@@ -272,21 +274,27 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
         val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     else:
-        traindir = os.path.join(args.data, 'train')
+        datadir_contents = os.listdir(args.data)
+        imagenet_train_tar_name = 'ILSVRC2012_img_train.tar'
+        if 'train' in datadir_contents:
+            traindir = os.path.join(args.data, 'train')
+            from_tar = False
+        elif imagenet_train_tar_name in datadir_contents:
+            traindir = os.path.join(args.data, imagenet_train_tar_name)
+            from_tar = True
         valdir = os.path.join(args.data, 'val')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
         train_dataset = MyImageFolder(
             traindir,
-            # '~/Downloads/ILSVRC2012_img_train.tar',
             transforms.Compose([
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 normalize,
             ]),
-            # from_tar=True
+            from_tar=from_tar
             )
 
         val_dataset = MyImageFolder(
@@ -297,7 +305,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 transforms.ToTensor(),
                 normalize,
             ]),
-            cache_images=True
+            cache_images=args.cache_images
             )
 
     if args.distributed:
@@ -316,9 +324,9 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=val_sampler)
 
     if args.evaluate:
-        validate(val_loader, ema.ema if args.use_ema else model, criterion, args)
+        validate(val_loader, model, criterion, args)
         return
-
+    print('START, rank:', args.rank)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -326,8 +334,14 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args, ema=(ema if args.use_ema else None))
 
+        if args.use_ema:
+            ema.apply_shadow()
+
         # evaluate on validation set
-        acc1, acc5, val_loss = validate(val_loader, ema.ema if args.use_ema else model, criterion, args)
+        acc1, acc5, val_loss = validate(val_loader, model, criterion, args)
+
+        if args.use_ema:
+            ema.restore()
         
         scheduler.step()
         
@@ -350,7 +364,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'training_results' : results_file.read_text()
             }
             if args.use_ema:
-                ckpt['ema'] = ema.ema.state_dict()
+                ckpt['ema'] = ema.shadow
                 ckpt['updates'] = ema.updates
             save_checkpoint(ckpt, is_best=is_best, save_dir=save_dir)
 
@@ -393,7 +407,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args, ema=No
         loss.backward()
         optimizer.step()
         if ema is not None:
-            ema.update(model)
+            ema.update()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -421,6 +435,7 @@ def validate(val_loader, model, criterion, args):
                     target = target.cuda(args.gpu, non_blocking=True)
 
                 # compute output
+                # print('val images device:', images.device)
                 output = model(images)
                 loss = criterion(output, target)
 
