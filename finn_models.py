@@ -234,7 +234,7 @@ class QuantConvBNReLU(nn.Sequential):
     
 
 class QuantInvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True):
+    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None):
         super(QuantInvertedResidual, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
@@ -247,7 +247,12 @@ class QuantInvertedResidual(nn.Module):
         #                             per_channel_broadcastable_shape=(1, hidden_dim, 1, 1),
         #                             scaling_per_channel=False,
         #                             return_quant_tensor=True)
-        self.identity = QuantIdentity(
+        if common_quant is not None:
+            self.extra_identity = False
+            self.identity = common_quant
+        else:
+            self.extra_identity = True
+            self.identity = QuantIdentity(
                                       act_quant=CommonIntActQuant,
                                       bit_width=act_bit_width,
                                     #   per_channel_broadcastable_shape=(1, hidden_dim, 1, 1),
@@ -285,8 +290,10 @@ class QuantInvertedResidual(nn.Module):
 
     def forward(self, x):
         if self.use_res_connect:
-            return self.identity(x) + self.conv(x)
-            # return x + self.conv(x)
+            if self.extra_identity:
+                return self.identity(x) + self.conv(x)
+            else:
+                return x + self.conv(x)
         else:
             return self.conv(x)
         
@@ -302,7 +309,8 @@ class QuantMobileNetV2(nn.Module):
                  first_layer_weight_bit_width=8,
                  last_layer_weight_bit_width=8,
                  block=None,
-                 norm_layer=None):
+                 norm_layer=None,
+                 use_common_quant=False):
         """
         MobileNet V2 main class
 
@@ -353,7 +361,12 @@ class QuantMobileNetV2(nn.Module):
             output_channel = _make_divisible(c * width_mult, round_nearest)
             for i in range(n):
                 stride = s if i == 0 else 1
-                features.append(block(input_channel, output_channel, stride=stride, expand_ratio=t, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width))
+                skip_connection_used = (stride == 1) and (input_channel == output_channel)
+                features.append(block(input_channel, output_channel, stride=stride, expand_ratio=t,
+                                      weight_bit_width=weight_bit_width,
+                                      act_bit_width=act_bit_width,
+                                      common_quant=common_quant if (skip_connection_used and use_common_quant) else None))
+                common_quant = features[-1].identity
                 input_channel = output_channel
         # building last several layers
         features.append(QuantConvBNReLU(input_channel, self.last_channel, kernel_size=1, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width))
