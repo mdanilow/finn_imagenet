@@ -326,6 +326,9 @@ class QuantMobileNetV2(nn.Module):
         """
         super(QuantMobileNetV2, self).__init__()
 
+        if use_common_quant:
+            print('==> Using common quantizers for skip connections in QuantMobileNetV2')
+
         if block is None:
             block = QuantInvertedResidual
 

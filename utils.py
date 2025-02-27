@@ -28,6 +28,8 @@ def load_ckpt(model, ckpt_path):
     for k, v in ckpt.items():
         if k.startswith('module'):
             new_k = '.'.join(k.split('.')[1:])
+        else:
+            new_k = k
         new_dict[new_k] = v
     model.load_state_dict(new_dict)
 
