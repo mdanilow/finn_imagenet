@@ -19,6 +19,19 @@ from torchvision.datasets import VisionDataset
 from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
 
 
+def load_ckpt(model, ckpt_path):
+
+    ckpt = torch.load(ckpt_path)
+    if 'state_dict' in ckpt:
+        ckpt = ckpt['state_dict']
+    new_dict = {}
+    for k, v in ckpt.items():
+        if k.startswith('module'):
+            new_k = '.'.join(k.split('.')[1:])
+        new_dict[new_k] = v
+    model.load_state_dict(new_dict)
+
+
 def increment_path(path, exist_ok=True, sep=''):
     # Increment path, i.e. runs/exp --> runs/exp{sep}0, runs/exp{sep}1 etc.
     path = Path(path)  # os-agnostic

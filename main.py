@@ -28,7 +28,7 @@ from brevitas import config
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder
+from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder, load_ckpt
 
 
 finn_models = ['QuantMobileNetV2']
@@ -165,7 +165,7 @@ def main_worker(gpu, ngpus_per_node, args):
         model = models.__dict__[args.arch]()
     if args.pretrained != '':
         print("=> initializing model with", args.pretrained)
-        model.load_state_dict(torch.load(args.pretrained))
+        load_ckpt(model, args.pretrained)
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
