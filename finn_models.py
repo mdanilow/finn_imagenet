@@ -202,7 +202,7 @@ class QuantConvBNReLU(nn.Sequential):
             act_bit_width=8,
             groups=1,
             bn_eps=1e-5,
-            activation_scaling_per_channel=True):
+            activation_scaling_per_channel=False):
         self.padding = (kernel_size - 1) // 2 if padding == None else padding
         layers = []
         layers.append(
@@ -226,7 +226,8 @@ class QuantConvBNReLU(nn.Sequential):
                 act_quant=CommonUintActQuant,
                 bit_width=act_bit_width,
                 per_channel_broadcastable_shape=(1, out_channels, 1, 1),
-                scaling_per_channel=activation_scaling_per_channel,
+                scaling_stats_permute_dims=(1, 0, 2, 3),
+                scaling_per_output_channel=activation_scaling_per_channel,
                 return_quant_tensor=True
             )
         )
@@ -241,12 +242,7 @@ class QuantInvertedResidual(nn.Module):
 
         hidden_dim = int(round(inp * expand_ratio))
         self.use_res_connect = self.stride == 1 and inp == oup and skip
-        # self.activation = QuantReLU(
-        #                             act_quant=CommonUintActQuant,
-        #                             bit_width=act_bit_width,
-        #                             per_channel_broadcastable_shape=(1, hidden_dim, 1, 1),
-        #                             scaling_per_channel=False,
-        #                             return_quant_tensor=True)
+
         if common_quant is not None:
             self.extra_identity = False
             self.identity = common_quant
@@ -255,37 +251,40 @@ class QuantInvertedResidual(nn.Module):
             self.identity = QuantIdentity(
                                       act_quant=CommonIntActQuant,
                                       bit_width=act_bit_width,
-                                    #   per_channel_broadcastable_shape=(1, hidden_dim, 1, 1),
-                                      scaling_per_channel=True,
+                                      per_channel_broadcastable_shape=(1, oup, 1, 1),
+                                      scaling_per_output_channel=False,
                                       return_quant_tensor=True)
         
         layers = []
         # pw
         if expand_ratio != 1:
-            layers.append(QuantConvBNReLU(inp, hidden_dim, kernel_size=1, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width))
+            layers.append(QuantConvBNReLU(inp, hidden_dim, kernel_size=1,
+                                          weight_bit_width=weight_bit_width,
+                                          act_bit_width=act_bit_width,
+                                          activation_scaling_per_channel=True))
         
         layers.extend([
-                        # dw
-                        QuantConvBNReLU(hidden_dim, hidden_dim, kernel_size=3, weight_bit_width=weight_bit_width, 
-                                   act_bit_width=act_bit_width, stride=stride, groups=hidden_dim),
-                        
-                        # pw-linear
-                        QuantConv2d(
-                        in_channels=hidden_dim,
-                        # in_channels=inp,
-                        out_channels=oup,
-                        kernel_size=1,
-                        stride=1,
-                        padding=0,
-                        bias=False,
-                        weight_quant=CommonIntWeightPerChannelQuant,
-                        weight_bit_width=weight_bit_width),
-                        
-                        # bn
-                        nn.BatchNorm2d(num_features=oup),
-                        # self.activation
-                        self.identity
-                    ])
+            # dw
+            QuantConvBNReLU(hidden_dim, hidden_dim, kernel_size=3, weight_bit_width=weight_bit_width, 
+                        act_bit_width=act_bit_width, stride=stride, groups=hidden_dim),
+            
+            # pw-linear
+            QuantConv2d(
+            in_channels=hidden_dim,
+            # in_channels=inp,
+            out_channels=oup,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=False,
+            weight_quant=CommonIntWeightPerChannelQuant,
+            weight_bit_width=weight_bit_width),
+            
+            # bn
+            nn.BatchNorm2d(num_features=oup),
+            # self.activation
+            self.identity
+        ])
         self.conv = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -358,7 +357,10 @@ class QuantMobileNetV2(nn.Module):
         # building first layer
         input_channel = _make_divisible(input_channel * width_mult, round_nearest)
         self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), round_nearest)
-        features = [QuantConvBNReLU(3, input_channel, stride=2, weight_bit_width=first_layer_weight_bit_width, act_bit_width=act_bit_width)]
+        features = [QuantConvBNReLU(3, input_channel, stride=2,
+                                    weight_bit_width=first_layer_weight_bit_width,
+                                    act_bit_width=act_bit_width,
+                                    activation_scaling_per_channel=True)]
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             output_channel = _make_divisible(c * width_mult, round_nearest)
