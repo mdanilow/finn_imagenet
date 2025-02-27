@@ -204,7 +204,7 @@ class MyDatasetFolder(VisionDataset):
 
         # caches images by default, for train ImageNet only
         if from_tar:
-            self.cache_images = True
+            cache_images = True
             self.imgs = []
             classes = []
             samples = []
@@ -227,7 +227,8 @@ class MyDatasetFolder(VisionDataset):
                                 for i, img_file in enumerate(class_tar):
                                     img = class_tar.extractfile(img_file)
                                     img = img.read()
-                                    img = Image.open(io.BytesIO(img)).convert("RGB")
+                                    img = io.BytesIO(img)
+                                    # img = Image.open(io.BytesIO(img)).convert("RGB")
                                     self.imgs.append(img)
                                     samples.append((None, class_to_idx[item.name]))
             
@@ -344,6 +345,8 @@ class MyDatasetFolder(VisionDataset):
         if self.cache_images:
             target = self.samples[index][1]
             sample = self.imgs[index]
+            if self.from_tar:
+                sample = Image.open(sample).convert("RGB")
         else:
             path, target = self.samples[index]
             sample = self.loader(path)
