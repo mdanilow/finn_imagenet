@@ -98,6 +98,7 @@ parser.add_argument('--cache_images', action='store_true')
 parser.add_argument('--weight_bit_width', type=int, default=8)
 parser.add_argument('--act_bit_width', type=int, default=8)
 parser.add_argument('--use_common_quant', action='store_true')
+parser.add_argument('--act_per_tensor', action="store_true")
 parser.add_argument('--export', help="just export qonnx", action='store_true')
 
 best_acc1 = 0
@@ -166,7 +167,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print("==> Using finn model:", args.arch)
         model = eval(args.arch)(weight_bit_width=args.weight_bit_width,
                                 act_bit_width=args.act_bit_width,
-                                use_common_quant=args.use_common_quant)
+                                use_common_quant=args.use_common_quant,
+                                act_per_channel=not args.act_per_tensor)
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()

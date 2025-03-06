@@ -235,7 +235,7 @@ class QuantConvBNReLU(nn.Sequential):
     
 
 class QuantInvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None):
+    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None, dw_act_per_channel=True):
         super(QuantInvertedResidual, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
@@ -261,7 +261,7 @@ class QuantInvertedResidual(nn.Module):
             layers.append(QuantConvBNReLU(inp, hidden_dim, kernel_size=1,
                                           weight_bit_width=weight_bit_width,
                                           act_bit_width=act_bit_width,
-                                          activation_scaling_per_channel=True))
+                                          activation_scaling_per_channel=dw_act_per_channel))
         
         layers.extend([
             # dw
@@ -309,7 +309,8 @@ class QuantMobileNetV2(nn.Module):
                  last_layer_weight_bit_width=8,
                  block=None,
                  norm_layer=None,
-                 use_common_quant=False):
+                 use_common_quant=False,
+                 act_per_channel=True):
         """
         MobileNet V2 main class
 
@@ -366,7 +367,7 @@ class QuantMobileNetV2(nn.Module):
         features = [QuantConvBNReLU(3, input_channel, stride=2,
                                     weight_bit_width=first_layer_weight_bit_width,
                                     act_bit_width=act_bit_width,
-                                    activation_scaling_per_channel=True)]
+                                    activation_scaling_per_channel=act_per_channel)]
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             output_channel = _make_divisible(c * width_mult, round_nearest)
@@ -376,7 +377,8 @@ class QuantMobileNetV2(nn.Module):
                 features.append(block(input_channel, output_channel, stride=stride, expand_ratio=t,
                                       weight_bit_width=weight_bit_width,
                                       act_bit_width=act_bit_width,
-                                      common_quant=common_quant if (skip_connection_used and use_common_quant) else None))
+                                      common_quant=common_quant if (skip_connection_used and use_common_quant) else None,
+                                      dw_act_per_channel=act_per_channel))
                 common_quant = features[-1].identity
                 input_channel = output_channel
         # building last several layers
