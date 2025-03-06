@@ -31,7 +31,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder, load_ckpt
+from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder, load_ckpt, plot_training_results
 
 
 finn_models = ['QuantMobileNetV2']
@@ -371,6 +371,7 @@ def main_worker(gpu, ngpus_per_node, args):
         results = (epoch, train_loss, val_loss, acc1, acc5)
         with open(results_file, 'a') as f:
             f.write('%15.4g' * 5 % results + '\n')  # append metrics, val_loss
+        plot_training_results(save_dir)
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):

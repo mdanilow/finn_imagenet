@@ -13,6 +13,8 @@ from tqdm import tqdm
 import tarfile
 from PIL import Image
 import io
+import numpy as np
+import matplotlib.pyplot as plt
 
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
 from torchvision.datasets import VisionDataset
@@ -61,6 +63,27 @@ def save_checkpoint(state, is_best, save_dir, filename='checkpoint.pth.tar'):
 
 def is_parallel(model):
     return type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
+
+
+def plot_training_results(save_dir):
+    results_file_path = join(save_dir, "results.txt")
+    with open(results_file_path, 'r') as file:
+        lines = file.readlines()
+        lines = [line.split() for line in lines]
+        # ignore first line (titles) and first column (epochs)
+        titles = lines[0][1:]
+        results = np.array([[float(el) for el in line[1:]] for line in lines[1:]])
+    epochs, num_plots = results.shape
+    fig, ax = plt.subplots(2, int(np.ceil(num_plots / 2)), figsize=(12, 12), tight_layout=True)
+    ax = ax.ravel()
+    x = range(epochs)
+
+    for plot_idx in range(num_plots):
+        y = results[:, plot_idx]
+        ax[plot_idx].plot(x, y, linewidth=2)
+        ax[plot_idx].set_title(titles[plot_idx])
+        ax[plot_idx].grid()
+    fig.savefig(join(save_dir, "results.png"))
 
 
 class ModelEMA:
