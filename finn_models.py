@@ -354,6 +354,12 @@ class QuantMobileNetV2(nn.Module):
             raise ValueError("inverted_residual_setting should be non-empty "
                              "or a 4-element list, got {}".format(inverted_residual_setting))
 
+        self.input_quant = QuantIdentity(
+            act_quant=CommonIntActQuant,
+            bit_width=first_layer_weight_bit_width,
+            scaling_per_output_channel=False,
+            return_quant_tensor=True
+        )
         # building first layer
         input_channel = _make_divisible(input_channel * width_mult, round_nearest)
         self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), round_nearest)
@@ -382,7 +388,7 @@ class QuantMobileNetV2(nn.Module):
             kernel_size=7,
             stride=1,
             bit_width=last_layer_weight_bit_width,
-            float_to_int_impl_type='ROUND')
+            float_to_int_impl_type='FLOOR')
 
         # building classifier
         self.classifier = nn.Sequential(
@@ -407,6 +413,7 @@ class QuantMobileNetV2(nn.Module):
     def _forward_impl(self, x):
         # This exists since TorchScript doesn't support inheritance, so the superclass method
         # (this one) needs to have a name other than `forward` that can be accessed in a subclass
+        x = self.input_quant(x)
         x = self.features(x)
         # Cannot use "squeeze" as batch-size can be 1 => must use reshape with x.shape[0]
         x = self.final_pool(x)

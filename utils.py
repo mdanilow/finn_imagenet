@@ -19,19 +19,25 @@ from torchvision.datasets import VisionDataset
 from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
 
 
-def load_ckpt(model, ckpt_path):
+def load_ckpt(model, ckpt_path, load_ema=False):
 
     ckpt = torch.load(ckpt_path)
     if 'state_dict' in ckpt:
-        ckpt = ckpt['state_dict']
+        state_dict = ckpt['state_dict']
+    else:
+        state_dict = ckpt
     new_dict = {}
-    for k, v in ckpt.items():
+    for k, v in state_dict.items():
         if k.startswith('module'):
             new_k = '.'.join(k.split('.')[1:])
         else:
             new_k = k
         new_dict[new_k] = v
     model.load_state_dict(new_dict)
+    if load_ema and 'ema' in ckpt:
+        ema = EMA(model)
+        ema.shadow = ckpt['ema']
+        ema.apply_shadow()
 
 
 def increment_path(path, exist_ok=True, sep=''):

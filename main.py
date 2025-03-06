@@ -24,6 +24,9 @@ import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 from brevitas import config
+from brevitas.export import export_qonnx
+from qonnx.transformation.infer_shapes import InferShapes
+from qonnx.core.modelwrapper import ModelWrapper
 
 config.IGNORE_MISSING_KEYS = True
 
@@ -95,6 +98,7 @@ parser.add_argument('--cache_images', action='store_true')
 parser.add_argument('--weight_bit_width', type=int, default=8)
 parser.add_argument('--act_bit_width', type=int, default=8)
 parser.add_argument('--use_common_quant', action='store_true')
+parser.add_argument('--export', help="just export qonnx", action='store_true')
 
 best_acc1 = 0
 
@@ -168,7 +172,20 @@ def main_worker(gpu, ngpus_per_node, args):
         model = models.__dict__[args.arch]()
     if args.pretrained != '':
         print("=> initializing model with", args.pretrained)
-        load_ckpt(model, args.pretrained)
+        load_ckpt(model, args.pretrained, load_ema=args.export)
+
+    # export only
+    if args.export:
+        export_qonnx(
+            model,
+            torch.rand(1, 3, 224, 224),
+            "export.onnx"
+        )
+        model = ModelWrapper("export.onnx")
+        model = model.transform(InferShapes())
+        model.save("export.onnx")
+        print("Model exported as export.onnx")
+        return
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():
         print('using CPU, this will be slow')
