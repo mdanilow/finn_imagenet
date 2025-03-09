@@ -4,21 +4,22 @@ from pathlib import Path
 from copy import deepcopy
 import math
 from multiprocessing.pool import ThreadPool
+import io
 
 import glob
 import re
 import torch
 from torch import nn
+from torch.nn.parallel.data_parallel import DataParallel
 from tqdm import tqdm
 import tarfile
 from PIL import Image
-import io
 import numpy as np
 import matplotlib.pyplot as plt
-
 from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
 from torchvision.datasets import VisionDataset
 from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
+
 
 
 def load_ckpt(model, ckpt, load_ema=False):
@@ -31,7 +32,7 @@ def load_ckpt(model, ckpt, load_ema=False):
         state_dict = ckpt
     new_dict = {}
     for k, v in state_dict.items():
-        if k.startswith('module'):
+        if k.startswith('module') and not isinstance(model, DataParallel):
             new_k = '.'.join(k.split('.')[1:])
         else:
             new_k = k

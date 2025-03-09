@@ -179,9 +179,9 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
-    if args.pretrained != '':
+    if args.resume or args.pretrained:
         print("=> initializing model with", args.pretrained)
-        load_ckpt(model, args.pretrained, load_ema=args.export)
+        load_ckpt(model, args.resume or args.pretrained, load_ema=args.export)
 
     # export only
     if args.export:
@@ -254,7 +254,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.resume:
         if os.path.isfile(args.resume):
             save_dir = Path(args.resume).parent
-            print("=> loading checkpoint '{}'".format(args.resume))
+            print("=> resuming training from checkpoint '{}'".format(args.resume))
             if args.gpu is None:
                 checkpoint = torch.load(args.resume)
             elif torch.cuda.is_available():
@@ -266,8 +266,6 @@ def main_worker(gpu, ngpus_per_node, args):
             if args.gpu is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
                 best_acc1 = best_acc1.to(args.gpu)
-            # model.load_state_dict(checkpoint['state_dict'])
-            load_ckpt(model, checkpoint)
             if args.use_ema:
                 # ema = ModelEMA(model)
                 ema = EMA(model)
@@ -280,8 +278,6 @@ def main_worker(gpu, ngpus_per_node, args):
             training_results = checkpoint['training_results']
             results_file = save_dir / 'results.txt'
             results_file.write_text(training_results)
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}', exiting...".format(args.resume))
             sys.exit()
