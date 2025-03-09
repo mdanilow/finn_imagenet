@@ -21,9 +21,10 @@ from torchvision.datasets import VisionDataset
 from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
 
 
-def load_ckpt(model, ckpt_path, load_ema=False):
+def load_ckpt(model, ckpt, load_ema=False):
 
-    ckpt = torch.load(ckpt_path)
+    if not isinstance(ckpt, dict):
+        ckpt = torch.load(ckpt)
     if 'state_dict' in ckpt:
         state_dict = ckpt['state_dict']
     else:

@@ -8,6 +8,7 @@ from enum import Enum
 from os.path import join
 from pathlib import Path
 import json
+import sys
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -106,6 +107,12 @@ best_acc1 = 0
 
 def main():
     args = parser.parse_args()
+    if args.resume:
+        with open(Path(args.resume).parent / "args.json") as f:
+            dic = json.load(f)
+            dic['resume'] = args.resume
+            dic['pretrained'] = ''
+            args = argparse.Namespace(**dic)
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -259,7 +266,8 @@ def main_worker(gpu, ngpus_per_node, args):
             if args.gpu is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
                 best_acc1 = best_acc1.to(args.gpu)
-            model.load_state_dict(checkpoint['state_dict'])
+            # model.load_state_dict(checkpoint['state_dict'])
+            load_ckpt(model, checkpoint)
             if args.use_ema:
                 # ema = ModelEMA(model)
                 ema = EMA(model)
@@ -275,7 +283,8 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            print("=> no checkpoint found at '{}', exiting...".format(args.resume))
+            sys.exit()
     else:
         if args.use_ema:
             # ema = ModelEMA(model)
