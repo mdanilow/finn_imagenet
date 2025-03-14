@@ -32,7 +32,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 config.IGNORE_MISSING_KEYS = True
 
 from finn_models import QuantMobileNetV2
-from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder, load_ckpt, plot_training_results
+from utils import increment_path, save_checkpoint, ModelEMA, EMA, MyImageFolder, load_ckpt, plot_training_results, handle_resume_args
 
 
 finn_models = ['QuantMobileNetV2']
@@ -42,26 +42,25 @@ model_names = sorted(name for name in models.__dict__
 model_names = finn_models + model_names
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR', nargs='?', default='imagenet',
+parser.add_argument('data', nargs='?', default='imagenet',
                     help='path to dataset (default: imagenet)')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='mobilenet_v2',
+parser.add_argument('--arch', default='mobilenet_v2',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: mobilenet_v2)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=64, type=int,
-                    metavar='N',
+parser.add_argument('--batch-size', default=64, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
-                    metavar='LR', help='initial learning rate', dest='lr')
+parser.add_argument('--lr', default=0.1, type=float,
+                    help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
@@ -108,12 +107,8 @@ best_acc1 = 0
 def main():
     args = parser.parse_args()
     if args.resume:
-        with open(Path(args.resume).parent / "args.json") as f:
-            dic = json.load(f)
-            dic['resume'] = args.resume
-            dic['pretrained'] = ''
-            args = argparse.Namespace(**dic)
-
+        args = handle_resume_args(args)
+        
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -180,7 +175,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
     if args.resume or args.pretrained:
-        print("=> initializing model with", args.pretrained)
+        print("=> initializing model with", args.resume or args.pretrained)
         load_ckpt(model, args.resume or args.pretrained, load_ema=args.export)
 
     # export only

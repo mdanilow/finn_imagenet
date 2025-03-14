@@ -5,8 +5,11 @@ from copy import deepcopy
 import math
 from multiprocessing.pool import ThreadPool
 import io
+import sys
 
+import argparse
 import glob
+import json
 import re
 import torch
 from torch import nn
@@ -20,6 +23,20 @@ from typing import Any, Callable, cast, Dict, List, Optional, Tuple, Union
 from torchvision.datasets import VisionDataset
 from torchvision.datasets.folder import make_dataset, find_classes, IMG_EXTENSIONS, default_loader
 
+
+def handle_resume_args(args):
+    sysargs = [a.strip('--') for a in sys.argv]
+    with open(Path(args.resume).parent / "args.json") as f:
+        dic = json.load(f)
+        # overwrite checkpoint args with passed args:
+        for sysarg in sysargs:
+            if sysarg in vars(args).keys():
+                dic[sysarg] = vars(args)[sysarg]
+                print('==> overwriting checkpoint arg', '{}'.format(sysarg), 'with new value:', dic[sysarg])
+        dic['pretrained'] = ''
+        args = argparse.Namespace(**dic)
+
+    return args
 
 
 def load_ckpt(model, ckpt, load_ema=False):
