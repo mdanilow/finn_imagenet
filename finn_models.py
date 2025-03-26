@@ -235,13 +235,14 @@ class QuantConvBNReLU(nn.Sequential):
     
 
 class QuantInvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None, dw_act_per_channel=True):
+    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None, dw_act_per_channel=True, requant_sum=False):
         super(QuantInvertedResidual, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
 
         hidden_dim = int(round(inp * expand_ratio))
         self.use_res_connect = self.stride == 1 and inp == oup and skip
+        self.requant_sum = requant_sum
 
         if common_quant is not None:
             self.extra_identity = False
@@ -249,6 +250,13 @@ class QuantInvertedResidual(nn.Module):
         else:
             self.extra_identity = True
             self.identity = QuantIdentity(
+                                      act_quant=CommonIntActQuant,
+                                      bit_width=act_bit_width,
+                                      per_channel_broadcastable_shape=(1, oup, 1, 1),
+                                      scaling_per_output_channel=False,
+                                      return_quant_tensor=True)
+        if requant_sum and self.use_res_connect:
+            self.sum_quant = QuantIdentity(
                                       act_quant=CommonIntActQuant,
                                       bit_width=act_bit_width,
                                       per_channel_broadcastable_shape=(1, oup, 1, 1),
@@ -290,11 +298,16 @@ class QuantInvertedResidual(nn.Module):
     def forward(self, x):
         if self.use_res_connect:
             if self.extra_identity:
-                return self.identity(x) + self.conv(x)
+                x = self.identity(x) + self.conv(x)
             else:
-                return x + self.conv(x)
+                x = x + self.conv(x)
+            
+            if self.requant_sum:
+                x = self.sum_quant(x)
         else:
-            return self.conv(x)
+            x = self.conv(x)
+
+        return x
         
 
 class QuantMobileNetV2(nn.Module):
@@ -310,7 +323,8 @@ class QuantMobileNetV2(nn.Module):
                  block=None,
                  norm_layer=None,
                  use_common_quant=False,
-                 act_per_channel=True):
+                 act_per_channel=True,
+                 requant_sum=False):
         """
         MobileNet V2 main class
 
@@ -378,7 +392,8 @@ class QuantMobileNetV2(nn.Module):
                                       weight_bit_width=weight_bit_width,
                                       act_bit_width=act_bit_width,
                                       common_quant=common_quant if (skip_connection_used and use_common_quant) else None,
-                                      dw_act_per_channel=act_per_channel))
+                                      dw_act_per_channel=act_per_channel,
+                                      requant_sum=requant_sum))
                 common_quant = features[-1].identity
                 input_channel = output_channel
         # building last several layers
