@@ -394,7 +394,11 @@ class QuantMobileNetV2(nn.Module):
                                       common_quant=common_quant if (skip_connection_used and use_common_quant) else None,
                                       dw_act_per_channel=act_per_channel,
                                       requant_sum=requant_sum))
-                common_quant = features[-1].identity
+                # pass the last quantizer of the block as a common_quant to be used in the next block
+                if requant_sum and skip_connection_used:
+                    common_quant = features[-1].sum_quant
+                else:
+                    common_quant = features[-1].identity
                 input_channel = output_channel
         # building last several layers
         features.append(QuantConvBNReLU(input_channel, self.last_channel, kernel_size=1, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width))
