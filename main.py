@@ -182,15 +182,16 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # export only
     if args.export:
+        export_path = Path(args.resume).parent / "export.onnx"
         export_qonnx(
             model,
             torch.rand(1, 3, 224, 224),
-            "export.onnx"
+            export_path
         )
-        model = ModelWrapper("export.onnx")
+        model = ModelWrapper(str(export_path))
         model = model.transform(InferShapes())
-        model.save("export.onnx")
-        print("Model exported as export.onnx")
+        model.save(export_path)
+        print("Model exported as {}".format(export_path))
         return
 
     if not torch.cuda.is_available() and not torch.backends.mps.is_available():

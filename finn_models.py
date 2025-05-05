@@ -11,6 +11,13 @@ from brevitas_examples.imagenet_classification.models.common import CommonIntAct
 from brevitas_examples.imagenet_classification.models.common import CommonIntWeightPerChannelQuant
 
 
+class MyIntActQuant(CommonIntActQuant):
+    scaling_min_val = 2e-5
+
+
+class MyUintActQuant(CommonUintActQuant):
+    scaling_min_val = 2e-5
+
 
 # ------------------------- MOBILENETV2
 
@@ -223,7 +230,7 @@ class QuantConvBNReLU(nn.Sequential):
         )
         layers.append(
             QuantReLU(
-                act_quant=CommonUintActQuant,
+                act_quant=MyUintActQuant,
                 bit_width=act_bit_width,
                 per_channel_broadcastable_shape=(1, out_channels, 1, 1),
                 scaling_stats_permute_dims=(1, 0, 2, 3),
@@ -250,14 +257,14 @@ class QuantInvertedResidual(nn.Module):
         else:
             self.extra_identity = True
             self.identity = QuantIdentity(
-                                      act_quant=CommonIntActQuant,
+                                      act_quant=MyIntActQuant,
                                       bit_width=act_bit_width,
                                       per_channel_broadcastable_shape=(1, oup, 1, 1),
                                       scaling_per_output_channel=False,
                                       return_quant_tensor=True)
         if requant_sum and self.use_res_connect:
             self.sum_quant = QuantIdentity(
-                                      act_quant=CommonIntActQuant,
+                                      act_quant=MyIntActQuant,
                                       bit_width=act_bit_width,
                                       per_channel_broadcastable_shape=(1, oup, 1, 1),
                                       scaling_per_output_channel=False,
@@ -370,7 +377,7 @@ class QuantMobileNetV2(nn.Module):
                              "or a 4-element list, got {}".format(inverted_residual_setting))
 
         self.input_quant = QuantIdentity(
-            act_quant=CommonIntActQuant,
+            act_quant=MyIntActQuant,
             bit_width=first_layer_weight_bit_width,
             scaling_per_output_channel=False,
             return_quant_tensor=True
