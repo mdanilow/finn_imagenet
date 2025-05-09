@@ -101,6 +101,7 @@ parser.add_argument('--use_common_quant', action='store_true')
 parser.add_argument('--act_per_tensor', action="store_true")
 parser.add_argument('--requant_sum', action="store_true")
 parser.add_argument('--export', help="just export qonnx", action='store_true')
+parser.add_argument('--fixed_point', action="store_true")
 
 best_acc1 = 0
 
@@ -172,7 +173,8 @@ def main_worker(gpu, ngpus_per_node, args):
                                 act_bit_width=args.act_bit_width,
                                 use_common_quant=args.use_common_quant,
                                 act_per_channel=not args.act_per_tensor,
-                                requant_sum=args.requant_sum)
+                                requant_sum=args.requant_sum,
+                                fixed_point=args.fixed_point)
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()

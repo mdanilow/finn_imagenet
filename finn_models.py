@@ -5,7 +5,7 @@ import torch
 from torch import nn, Tensor
 
 from brevitas.nn import QuantConv2d, QuantLinear, QuantReLU, QuantIdentity, TruncAvgPool2d
-from brevitas.quant import Int32Bias
+from brevitas.quant import Int32Bias, Int8WeightPerChannelFixedPointMSE, Int8ActPerTensorFixedPoint, Uint8ActPerTensorFixedPoint
 
 from brevitas_examples.imagenet_classification.models.common import CommonIntActQuant, CommonUintActQuant
 from brevitas_examples.imagenet_classification.models.common import CommonIntWeightPerChannelQuant
@@ -209,7 +209,9 @@ class QuantConvBNReLU(nn.Sequential):
             act_bit_width=8,
             groups=1,
             bn_eps=1e-5,
-            activation_scaling_per_channel=False):
+            activation_scaling_per_channel=False,
+            weight_quant=CommonIntWeightPerChannelQuant,
+            act_quant=MyUintActQuant):
         self.padding = (kernel_size - 1) // 2 if padding == None else padding
         layers = []
         layers.append(
@@ -221,7 +223,7 @@ class QuantConvBNReLU(nn.Sequential):
                 padding=self.padding,
                 groups=groups,
                 bias=False,
-                weight_quant=CommonIntWeightPerChannelQuant,
+                weight_quant=weight_quant,
                 weight_bit_width=weight_bit_width
             )
         )
@@ -230,7 +232,7 @@ class QuantConvBNReLU(nn.Sequential):
         )
         layers.append(
             QuantReLU(
-                act_quant=MyUintActQuant,
+                act_quant=act_quant,
                 bit_width=act_bit_width,
                 per_channel_broadcastable_shape=(1, out_channels, 1, 1),
                 scaling_stats_permute_dims=(1, 0, 2, 3),
@@ -242,7 +244,9 @@ class QuantConvBNReLU(nn.Sequential):
     
 
 class QuantInvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8, skip=True, common_quant=None, dw_act_per_channel=True, requant_sum=False):
+    def __init__(self, inp, oup, stride, expand_ratio=1, weight_bit_width=8, act_bit_width=8,
+                 skip=True, common_quant=None, dw_act_per_channel=True, requant_sum=False,
+                 weight_quant=CommonIntWeightPerChannelQuant, identity_quant=MyIntActQuant, act_quant=MyUintActQuant):
         super(QuantInvertedResidual, self).__init__()
         self.stride = stride
         assert stride in [1, 2]
@@ -257,14 +261,14 @@ class QuantInvertedResidual(nn.Module):
         else:
             self.extra_identity = True
             self.identity = QuantIdentity(
-                                      act_quant=MyIntActQuant,
+                                      act_quant=identity_quant,
                                       bit_width=act_bit_width,
                                       per_channel_broadcastable_shape=(1, oup, 1, 1),
                                       scaling_per_output_channel=False,
                                       return_quant_tensor=True)
         if requant_sum and self.use_res_connect:
             self.sum_quant = QuantIdentity(
-                                      act_quant=MyIntActQuant,
+                                      act_quant=identity_quant,
                                       bit_width=act_bit_width,
                                       per_channel_broadcastable_shape=(1, oup, 1, 1),
                                       scaling_per_output_channel=False,
@@ -276,12 +280,15 @@ class QuantInvertedResidual(nn.Module):
             layers.append(QuantConvBNReLU(inp, hidden_dim, kernel_size=1,
                                           weight_bit_width=weight_bit_width,
                                           act_bit_width=act_bit_width,
-                                          activation_scaling_per_channel=dw_act_per_channel))
+                                          activation_scaling_per_channel=dw_act_per_channel,
+                                          weight_quant=weight_quant,
+                                          act_quant=act_quant))
         
         layers.extend([
             # dw
             QuantConvBNReLU(hidden_dim, hidden_dim, kernel_size=3, weight_bit_width=weight_bit_width, 
-                        act_bit_width=act_bit_width, stride=stride, groups=hidden_dim),
+                            act_bit_width=act_bit_width, stride=stride, groups=hidden_dim,
+                            weight_quant=weight_quant, act_quant=act_quant),
             
             # pw-linear
             QuantConv2d(
@@ -292,7 +299,7 @@ class QuantInvertedResidual(nn.Module):
             stride=1,
             padding=0,
             bias=False,
-            weight_quant=CommonIntWeightPerChannelQuant,
+            weight_quant=weight_quant,
             weight_bit_width=weight_bit_width),
             
             # bn
@@ -331,7 +338,8 @@ class QuantMobileNetV2(nn.Module):
                  norm_layer=None,
                  use_common_quant=False,
                  act_per_channel=True,
-                 requant_sum=False):
+                 requant_sum=False,
+                 fixed_point=False):
         """
         MobileNet V2 main class
 
@@ -356,6 +364,10 @@ class QuantMobileNetV2(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
 
+        weight_quant = Int8WeightPerChannelFixedPointMSE if fixed_point else CommonIntWeightPerChannelQuant
+        act_quant = Uint8ActPerTensorFixedPoint if fixed_point else MyUintActQuant
+        identity_quant = Int8ActPerTensorFixedPoint if fixed_point else MyIntActQuant
+
         input_channel = 32
         last_channel = 1280
 
@@ -377,7 +389,7 @@ class QuantMobileNetV2(nn.Module):
                              "or a 4-element list, got {}".format(inverted_residual_setting))
 
         self.input_quant = QuantIdentity(
-            act_quant=MyIntActQuant,
+            act_quant=act_quant,
             bit_width=first_layer_weight_bit_width,
             scaling_per_output_channel=False,
             return_quant_tensor=True
@@ -388,7 +400,9 @@ class QuantMobileNetV2(nn.Module):
         features = [QuantConvBNReLU(3, input_channel, stride=2,
                                     weight_bit_width=first_layer_weight_bit_width,
                                     act_bit_width=act_bit_width,
-                                    activation_scaling_per_channel=act_per_channel)]
+                                    activation_scaling_per_channel=act_per_channel,
+                                    weight_quant=weight_quant,
+                                    act_quant=act_quant)]
         # building inverted residual blocks
         for t, c, n, s in inverted_residual_setting:
             output_channel = _make_divisible(c * width_mult, round_nearest)
@@ -400,7 +414,10 @@ class QuantMobileNetV2(nn.Module):
                                       act_bit_width=act_bit_width,
                                       common_quant=common_quant if (skip_connection_used and use_common_quant) else None,
                                       dw_act_per_channel=act_per_channel,
-                                      requant_sum=requant_sum))
+                                      requant_sum=requant_sum,
+                                      weight_quant=weight_quant,
+                                      act_quant=act_quant,
+                                      identity_quant=identity_quant))
                 # pass the last quantizer of the block as a common_quant to be used in the next block
                 if requant_sum and skip_connection_used:
                     common_quant = features[-1].sum_quant
@@ -408,7 +425,8 @@ class QuantMobileNetV2(nn.Module):
                     common_quant = features[-1].identity
                 input_channel = output_channel
         # building last several layers
-        features.append(QuantConvBNReLU(input_channel, self.last_channel, kernel_size=1, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width))
+        features.append(QuantConvBNReLU(input_channel, self.last_channel, kernel_size=1, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width,
+                                        weight_quant=weight_quant, act_quant=act_quant))
         # make it nn.Sequential
         self.features = nn.Sequential(*features)
 
@@ -421,8 +439,8 @@ class QuantMobileNetV2(nn.Module):
         # building classifier
         self.classifier = nn.Sequential(
             nn.Dropout(0.2),
-            QuantLinear(self.last_channel, num_classes, bias=True, bias_quant=Int32Bias, weight_quant=CommonIntWeightPerChannelQuant,
-                           weight_bit_width=last_layer_weight_bit_width),
+            QuantLinear(self.last_channel, num_classes, bias=True, bias_quant=Int32Bias, weight_quant=weight_quant,
+                        weight_bit_width=last_layer_weight_bit_width),
         )
 
         # weight initialization
