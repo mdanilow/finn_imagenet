@@ -5,7 +5,7 @@ import torch
 from torch import nn, Tensor
 
 from brevitas.nn import QuantConv2d, QuantLinear, QuantReLU, QuantIdentity, TruncAvgPool2d
-from brevitas.quant import Int32Bias, Int8WeightPerChannelFixedPointMSE, Int8ActPerTensorFixedPoint, Uint8ActPerTensorFixedPoint
+from brevitas.quant import Int32Bias, Int8WeightPerChannelFixedPointMSE, Int8ActPerTensorFixedPoint, Uint8ActPerTensorFixedPoint, Int8BiasPerTensorFixedPointInternalScaling
 
 from brevitas_examples.imagenet_classification.models.common import CommonIntActQuant, CommonUintActQuant
 from brevitas_examples.imagenet_classification.models.common import CommonIntWeightPerChannelQuant
@@ -367,6 +367,7 @@ class QuantMobileNetV2(nn.Module):
         weight_quant = Int8WeightPerChannelFixedPointMSE if fixed_point else CommonIntWeightPerChannelQuant
         act_quant = Uint8ActPerTensorFixedPoint if fixed_point else MyUintActQuant
         identity_quant = Int8ActPerTensorFixedPoint if fixed_point else MyIntActQuant
+        bias_quant = Int8BiasPerTensorFixedPointInternalScaling if fixed_point else Int32Bias
 
         input_channel = 32
         last_channel = 1280
@@ -439,7 +440,7 @@ class QuantMobileNetV2(nn.Module):
         # building classifier
         self.classifier = nn.Sequential(
             nn.Dropout(0.2),
-            QuantLinear(self.last_channel, num_classes, bias=True, bias_quant=Int32Bias, weight_quant=weight_quant,
+            QuantLinear(self.last_channel, num_classes, bias=True, bias_quant=bias_quant, weight_quant=weight_quant,
                         weight_bit_width=last_layer_weight_bit_width),
         )
 
