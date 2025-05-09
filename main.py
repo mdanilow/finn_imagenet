@@ -97,6 +97,8 @@ parser.add_argument('--use_ema', action='store_true')
 parser.add_argument('--cache_images', action='store_true')
 parser.add_argument('--weight_bit_width', type=int, default=8)
 parser.add_argument('--act_bit_width', type=int, default=8)
+parser.add_argument('--first_layer_weight_bit_width', type=int, default=8)
+parser.add_argument('--last_layer_weight_bit_width', type=int, default=8)
 parser.add_argument('--use_common_quant', action='store_true')
 parser.add_argument('--act_per_tensor', action="store_true")
 parser.add_argument('--requant_sum', action="store_true")
@@ -171,6 +173,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print("==> Using finn model:", args.arch)
         model = eval(args.arch)(weight_bit_width=args.weight_bit_width,
                                 act_bit_width=args.act_bit_width,
+                                first_layer_weight_bit_width=args.first_layer_weight_bit_width,
+                                last_layer_weight_bit_width=args.last_layer_weight_bit_width,
                                 use_common_quant=args.use_common_quant,
                                 act_per_channel=not args.act_per_tensor,
                                 requant_sum=args.requant_sum,
