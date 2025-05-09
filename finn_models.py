@@ -357,6 +357,8 @@ class QuantMobileNetV2(nn.Module):
 
         if use_common_quant:
             print('==> Using common quantizers for skip connections in QuantMobileNetV2')
+        if fixed_point:
+            print('==> Using fixed point quantization')
 
         if block is None:
             block = QuantInvertedResidual
