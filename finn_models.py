@@ -392,7 +392,7 @@ class QuantMobileNetV2(nn.Module):
                              "or a 4-element list, got {}".format(inverted_residual_setting))
 
         self.input_quant = QuantIdentity(
-            act_quant=act_quant,
+            act_quant=identity_quant,
             bit_width=first_layer_weight_bit_width,
             scaling_per_output_channel=False,
             return_quant_tensor=True
