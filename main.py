@@ -247,53 +247,9 @@ def main_worker(gpu, ngpus_per_node, args):
     
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
-    
-    # optionally resume from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            save_dir = Path(args.resume).parent
-            print("=> resuming training from checkpoint '{}'".format(args.resume))
-            if args.gpu is None:
-                checkpoint = torch.load(args.resume)
-            elif torch.cuda.is_available():
-                # Map model to be loaded to specified single gpu.
-                loc = 'cuda:{}'.format(args.gpu)
-                checkpoint = torch.load(args.resume, map_location=loc)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            if args.gpu is not None:
-                # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(args.gpu)
-            if args.use_ema:
-                # ema = ModelEMA(model)
-                ema = EMA(model)
-                if 'ema' in checkpoint:
-                    ema.shadow = checkpoint['ema']
-                    ema.updates = checkpoint['updates']
-
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            training_results = checkpoint['training_results']
-            results_file = save_dir / 'results.txt'
-            results_file.write_text(training_results)
-        else:
-            print("=> no checkpoint found at '{}', exiting...".format(args.resume))
-            sys.exit()
-    else:
-        if args.use_ema:
-            # ema = ModelEMA(model)
-            ema = EMA(model)
-        save_dir = increment_path(args.name, exist_ok=False)
-        results_file = Path(save_dir) / 'results.txt'
-        os.makedirs(save_dir)
-        RESULTS_TAGS = ('Epoch', 'Train_loss', 'Val_loss', 'Val_Acc@1', 'Val_Acc@5')
-        header = '%15s' * len(RESULTS_TAGS) % RESULTS_TAGS
-        results_file.write_text(header + '\n')
-        with open(join(save_dir, 'args.json'), 'w') as args_file:
-            json.dump(vars(args), args_file, indent=4)
 
 
-    # Data loading code
+        # Data loading code
     if args.dummy:
         print("=> Dummy data is used!")
         train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
@@ -347,6 +303,55 @@ def main_worker(gpu, ngpus_per_node, args):
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True, sampler=val_sampler)
+    
+    
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            save_dir = Path(args.resume).parent
+            print("=> resuming training from checkpoint '{}'".format(args.resume))
+            if args.gpu is None:
+                checkpoint = torch.load(args.resume)
+            elif torch.cuda.is_available():
+                # Map model to be loaded to specified single gpu.
+                loc = 'cuda:{}'.format(args.gpu)
+                checkpoint = torch.load(args.resume, map_location=loc)
+            args.start_epoch = checkpoint['epoch']
+            best_acc1 = checkpoint['best_acc1']
+            if args.gpu is not None:
+                # best_acc1 may be from a checkpoint from a different GPU
+                best_acc1 = best_acc1.to(args.gpu)
+            if args.use_ema:
+                ema = ModelEMA(model, device=device)
+                # ema = EMA(model)
+                if 'ema' in checkpoint:
+                    ema.ema.load_state_dict(checkpoint['ema'])
+                    # ema.shadow = checkpoint['ema']
+                    ema.updates = checkpoint['updates']
+
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            training_results = checkpoint['training_results']
+            results_file = save_dir / 'results.txt'
+            results_file.write_text(training_results)
+        else:
+            print("=> no checkpoint found at '{}', exiting...".format(args.resume))
+            sys.exit()
+    else:
+        for i, v in train_loader:
+            model(i)
+            break
+        if args.use_ema:
+            ema = ModelEMA(model, device=device)
+            # ema = EMA(model)
+        save_dir = increment_path(args.name, exist_ok=False)
+        results_file = Path(save_dir) / 'results.txt'
+        os.makedirs(save_dir)
+        RESULTS_TAGS = ('Epoch', 'Train_loss', 'Val_loss', 'Val_Acc@1', 'Val_Acc@5')
+        header = '%15s' * len(RESULTS_TAGS) % RESULTS_TAGS
+        results_file.write_text(header + '\n')
+        with open(join(save_dir, 'args.json'), 'w') as args_file:
+            json.dump(vars(args), args_file, indent=4)
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -359,14 +364,14 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch, device, args, ema=(ema if args.use_ema else None))
 
-        if args.use_ema:
-            ema.apply_shadow()
+        # if args.use_ema:
+        #     ema.apply_shadow()
 
         # evaluate on validation set
-        acc1, acc5, val_loss = validate(val_loader, model, criterion, args)
+        acc1, acc5, val_loss = validate(val_loader, (ema.ema if args.use_ema else model), criterion, args)
 
-        if args.use_ema:
-            ema.restore()
+        # if args.use_ema:
+        #     ema.restore()
         
         scheduler.step()
         
@@ -390,7 +395,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'training_results' : results_file.read_text()
             }
             if args.use_ema:
-                ckpt['ema'] = ema.shadow
+                ckpt['ema'] = ema.ema.state_dict()
                 ckpt['updates'] = ema.updates
             save_checkpoint(ckpt, is_best=is_best, save_dir=save_dir)
 
@@ -433,7 +438,7 @@ def train(train_loader, model, criterion, optimizer, epoch, device, args, ema=No
         loss.backward()
         optimizer.step()
         if ema is not None:
-            ema.update()
+            ema.update(model)
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -452,16 +457,16 @@ def validate(val_loader, model, criterion, args):
             end = time.time()
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
-                if args.gpu is not None and torch.cuda.is_available():
-                    images = images.cuda(args.gpu, non_blocking=True)
+                # if args.gpu is not None and torch.cuda.is_available():
+                #     images = images.cuda(args.gpu, non_blocking=True)
                 if torch.backends.mps.is_available():
                     images = images.to('mps')
                     target = target.to('mps')
                 if torch.cuda.is_available():
-                    target = target.cuda(args.gpu, non_blocking=True)
+                    target = target.cuda(non_blocking=True)
+                    images = images.cuda(non_blocking=True)
 
                 # compute output
-                # print('val images device:', images.device)
                 output = model(images)
                 loss = criterion(output, target)
 

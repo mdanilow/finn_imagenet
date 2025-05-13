@@ -115,13 +115,14 @@ class ModelEMA:
     GPU assignment and distributed training wrappers.
     """
 
-    def __init__(self, model, decay=0.9999, updates=0, average_quant_scales=False):
+    def __init__(self, model, decay=0.9999, updates=0, average_quant_scales=False, device='cpu'):
         # Create EMA
-        self.ema = deepcopy(model.module if is_parallel(model) else model).eval()  # FP32 EMA
+        self.ema = deepcopy(model.module if is_parallel(model) else model)
+        self.ema.to(device)  # FP32 EMA
+        self.ema.eval()
         # if next(model.parameters()).device.type != 'cpu':
         #     self.ema.half()  # FP16 EMA
         self.device = next(model.parameters()).device
-        print('ema device:', self.device)
         # self.ema.to(self.device)
         self.updates = updates  # number of EMA updates
         self.decay = lambda x: decay * (1 - math.exp(-x / 2000))  # decay exponential ramp (to help early epochs)
@@ -132,11 +133,9 @@ class ModelEMA:
     def update(self, model):
         # Update EMA parameters
         with torch.no_grad():
-            new_keys = False
             self.updates += 1
             d = self.decay(self.updates)
             msd = model.module.state_dict() if is_parallel(model) else model.state_dict()  # model state_dict
-            ema_msd = self.ema.state_dict()
             for k, v in self.ema.state_dict().items():
                 # for Brevitas activation scales, keep the newest value
                 if self.overwrite_quant_scales and '.tensor_quant.scaling_impl.value' in k:
@@ -147,14 +146,6 @@ class ModelEMA:
                     v = v.to(self.device)
                     v *= scale
                     v += (1. - scale) * msd[k].detach()
-            for k, v in msd.items():
-                if k not in ema_msd:
-                    new_keys = True
-                    print('adding', k, 'to ema')
-                    ema_msd[k] = v
-            if new_keys:
-                print('LOADED')
-                self.ema.load_state_dict(ema_msd)
 
 
 class EMA:
